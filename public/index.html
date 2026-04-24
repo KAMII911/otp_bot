@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>OTP Console</title>
+<style>
+  body {
+    background: black;
+    color: #00ff00;
+    font-family: monospace;
+    padding: 15px;
+  }
+</style>
+</head>
+<body>
+
+<pre id="console">Connecting...</pre>
+
+<script>
+let lastOTP = null;
+let history = [];
+
+async function fetchOTP() {
+  try {
+    const res = await fetch("/api/ivasms/otp");
+    const data = await res.json();
+
+    const history = data.history || [];
+
+    const lines = history.map(item => {
+      return "Number: " + item.number +
+             " | OTP: " + item.otp +
+             " | Time: " + item.time;
+    });
+
+    document.getElementById("console").innerText =
+      lines.join("\n\n");
+
+  } catch (e) {
+    document.getElementById("console").innerText = "Error...";
+  }
+}
+// auto refresh
+setInterval(fetchOTP, 3000);
+fetchOTP();
+</script>
+
+</body>
+</html>
