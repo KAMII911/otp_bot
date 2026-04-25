@@ -5,6 +5,10 @@ const zlib    = require("zlib");
 let otpHistory = [];
 let seenOTPs = new Set();
 let history = [];
+let COOKIES = {
+  "XSRF-TOKEN": process.env.XSRF || "",
+  "ivas_sms_session": process.env.SESSION || ""
+};
 const router = express.Router();
 
 /* ================= CONFIG ================= */
@@ -13,12 +17,7 @@ const TERMINATION_ID = "1029603"
 const USER_AGENT     = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36";
 
 /* ================= COOKIES (Update when expired) ================= */
-// Jab expire ho: browser me login karo → DevTools → Network → koi bhi request
-// → Request Headers → Cookie se XSRF-TOKEN aur ivas_sms_session copy karo
-let COOKIES = {
-  "XSRF-TOKEN":       "eyJpdiI6InFEc3M1R2lmTFVRTmpnTmRPZno0cUE9PSIsInZhbHVlIjoiY29hazNndWJWcFlDNEJuTmVaSk9XN1Z0Wm93NnNhYnpSTENnVXljN080cDNpL0NXSUZYVUtTdVBTV3lnUXJxRmJDVjYzUXI3R0FtREMxVXBlUGZFaE03T1UzQkhqcHFwQ2xqUWtpMnhYRCtZb2pXT2dheG5xUE1HRzhaTW56TEYiLCJtYWMiOiJhODE1YTY4ODBjYmRhMzAwMWFjMmM1N2I0MjJiYjA2NjU3OGQ0NTg5NzAxYWU4MjcwODYwZWMzMTAyMDBkMGFiIiwidGFnIjoiIn0%3D",
-  "ivas_sms_session": "eyJpdiI6InAzWkxGdzU2WjhGbENqSDBLWDlVZ0E9PSIsInZhbHVlIjoiZnJEKzhLQUlhSzNLTDE4RzkzZm1ueGoxSllVQmRSN0xtYWljU3o5bEFmWXlnYmtNbDM1MGZTRmlrWTZsa2JOTXBIZkNVTHdiYVlpQ3Q1eDNraXFCWG1ITkVXK2QwK1hmTzdaeFBZcVVuVTZDaitVOUt5c2R4Qkc3OWt5NGh6VWgiLCJtYWMiOiI4M2JjYWQwOWM5ZmMyN2RkYTkyZjA5NjcxMGYyZWZiMDgzZjc3YThhNTg0MjlkMTUxOTQ2ZTQ1MGYwNzE1OGE0IiwidGFnIjoiIn0%3D"
-};
+
 
 /* ================= HELPERS ================= */
 function getToday() {
@@ -26,13 +25,28 @@ function getToday() {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 }
 
+function getDateRange() {
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+
+  const format = (d) =>
+    `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+
+  return {
+    start: format(yesterday),
+    end: format(today)
+  };
+}
+
+
+
 function cookieString() {
-  return Object.entries(COOKIES).map(([k,v]) => `${k}=${v}`).join("; ");
+  return `XSRF-TOKEN=${COOKIES["XSRF-TOKEN"]}; ivas_sms_session=${COOKIES["ivas_sms_session"]}`;
 }
 
 function getXsrf() {
-  try { return decodeURIComponent(COOKIES["XSRF-TOKEN"] || ""); }
-  catch { return COOKIES["XSRF-TOKEN"] || ""; }
+  return COOKIES["XSRF-TOKEN"];
 }
 
 function safeJSON(text) {
@@ -105,26 +119,6 @@ function makeRequest(method, path, body, contentType, extraHeaders = {}) {
   });
 }
 
-
-/* function to add cookies auto */
-
-function loadCookiesFromFile() {
-  try {
-    const path = require("path");
-
-    const filePath = path.join(__dirname, "cookies.json");
-    const raw = fs.readFileSync(filePath, "utf-8");
-    const data = JSON.parse(raw);
-
-    COOKIES["XSRF-TOKEN"] = data.xsrf;
-    COOKIES["ivas_sms_session"] = data.session;
-
-    console.log("✅ Cookies loaded from file");
-  } catch (e) {
-    console.log("❌ Cookie load error:", e.message);
-  }
-
-}
 
 
 
@@ -300,7 +294,7 @@ async function getSMS(token) {
 
   for (const range of ranges) {
     // Step 2: Get numbers per range
-    const b2 = new URLSearchParams({ _token: token, start: today, end: today, range }).toString();
+    const b2 = new URLSearchParams({ _token: token, start, end, range }).toString();
     const r2  = await makeRequest(
       "POST", "/portal/sms/received/getsms/number", b2,
       "application/x-www-form-urlencoded",
@@ -315,7 +309,7 @@ async function getSMS(token) {
 
     for (const number of numbers) {
       // Step 3: Get actual OTP SMS for each number
-      const b3 = new URLSearchParams({ _token: token, start: today, end: today, Number: number, Range: range }).toString();
+      const b3 = new URLSearchParams({ _token: token, start, end, Number: number, Range: range }).toString();
       const r3  = await makeRequest(
         "POST", "/portal/sms/received/getsms/number/sms", b3,
         "application/x-www-form-urlencoded",
@@ -325,7 +319,7 @@ async function getSMS(token) {
       if (!r3) continue;
 
       // Parse OTP messages from HTML
-      const msgs = parseSMSMessages(r3.body, range, number, today);
+      const msgs = parseSMSMessages(r3.body, range, number, end);
       allRows.push(...msgs);
     }
   }
@@ -428,12 +422,12 @@ function fixNumbers(json) {
 
 /* ================= GET SMS ================= */
 async function getSMS(token) {
-  const today    = getToday();
+  const { start, end } = getDateRange();
   const boundary = "----WebKitFormBoundary6I2Js7TBhcJuwIqw";
 
   const parts = [
-    `--${boundary}\r\nContent-Disposition: form-data; name="from"\r\n\r\n${today}`,
-    `--${boundary}\r\nContent-Disposition: form-data; name="to"\r\n\r\n${today}`,
+    `--${boundary}\r\nContent-Disposition: form-data; name="from"\r\n\r\n${start}`,
+    `--${boundary}\r\nContent-Disposition: form-data; name="to"\r\n\r\n${end}`,
     `--${boundary}\r\nContent-Disposition: form-data; name="_token"\r\n\r\n${token}`,
     `--${boundary}--`
   ].join("\r\n");
@@ -464,8 +458,8 @@ async function getSMS(token) {
     try {
       const body = new URLSearchParams({
         _token: token,
-        start:  today,
-        end:    today,
+        start,
+        end,
         range:  range
       }).toString();
 
@@ -552,19 +546,25 @@ function parseNumberRows(html, range) {
 
 
 router.get("/set-cookie", (req, res) => {
-  const { xsrf, session } = req.query;
+  const { xsrf, session, key } = req.query;
 
+  // 🔐 simple protection
+  if (key !== "oklogin123") {
+    return res.status(403).send("Unauthorized");
+  }
+
+  if (!xsrf || !session) {
+    return res.status(400).json({ error: "Missing xsrf or session" });
+  }
+
+  // 🔥 update runtime cookies
   COOKIES["XSRF-TOKEN"] = xsrf;
   COOKIES["ivas_sms_session"] = session;
 
-  // 🔥 save to file
-  fs.writeFileSync("cookies.json", JSON.stringify({ xsrf, session }, null, 2));
-
-  res.send("✅ Cookies saved & updated");
+  res.json({
+    status: "✅ Cookies updated (no restart needed)"
+  });
 });
-
-loadCookiesFromFile();
-
 
 
 // Main API
@@ -618,77 +618,91 @@ function extractOTP(message) {
 router.get("/otp", async (req, res) => {
   try {
     const token = await fetchToken();
-    const today = getToday();
+    const { start, end } = getDateRange();
 
     const boundary = "----WebKitFormBoundary6I2Js7TBhcJuwIqw";
 
     const parts = [
-      `--${boundary}\r\nContent-Disposition: form-data; name="from"\r\n\r\n${today}`,
-      `--${boundary}\r\nContent-Disposition: form-data; name="to"\r\n\r\n${today}`,
+      `--${boundary}\r\nContent-Disposition: form-data; name="from"\r\n\r\n${start}`,
+      `--${boundary}\r\nContent-Disposition: form-data; name="to"\r\n\r\n${end}`,
       `--${boundary}\r\nContent-Disposition: form-data; name="_token"\r\n\r\n${token}`,
       `--${boundary}--`
     ].join("\r\n");
 
-    // STEP 1: ranges
-    const r1 = await makeRequest("POST", "/portal/sms/received/getsms", parts,
-      `multipart/form-data; boundary=${boundary}`,
-      { "Referer": `${BASE_URL}/portal/sms/received` }
-    );
+// STEP 1: ranges
+    const r1 = await makeRequest(
+  "POST",
+  "/portal/sms/received/getsms",
+  parts,
+  `multipart/form-data; boundary=${boundary}`,
+  { "Referer": `${BASE_URL}/portal/sms/received` }
+);
 
-    const rangeMatch = r1.body.match(/toggleRange\('([^']+)'/);
-    if (!rangeMatch) return res.json({ error: "No ranges" });
+    const rangeMatches = [...r1.body.matchAll(/toggleRange\('([^']+)'/g)];
+    if (!rangeMatches.length) return res.json({ error: "No ranges" });
 
-    const range = rangeMatch[1];
+    const ranges = rangeMatches.map(m => m[1]);
 
-    // STEP 2: number
-    const r2 = await makeRequest("POST", "/portal/sms/received/getsms/number",
-      new URLSearchParams({ _token: token, start: today, end: today, range }).toString(),
-      "application/x-www-form-urlencoded"
-    );
+// 🔥 LOOP RANGES
+    for (const range of ranges) {
 
-    const numberMatches = [...r2.body.matchAll(/toggleNum[^(]+\('(\d+)'/g)];
-
-
-    const numbers = numberMatches.map(m => m[1]);
-
-    // STEP 3: messages
-    let latestOTP = null;
-    let latestNumber = null;
-    for (const number of numbers) {
-      const r3 = await makeRequest(
+  // STEP 2: numbers
+      const r2 = await makeRequest(
     "POST",
-    "/portal/sms/received/getsms/number/sms",
+    "/portal/sms/received/getsms/number",
         new URLSearchParams({
       _token: token,
-      start: today,
-      end: today,
-      Number: number,
-      Range: range
+      start,
+      end,
+      range
     }).toString(),
     "application/x-www-form-urlencoded"
   );
 
-    // Extract messages
-    const rows = [...r3.body.matchAll(/class="msg-text"[^>]*>([\s\S]*?)<\/div>/gi)];
-    const messages = rows.map(m => clean(m[1]));
+      const numberMatches = [...r2.body.matchAll(/toggleNum[^(]+\('(\d+)'/g)];
+      const numbers = numberMatches.map(m => m[1]);
 
-    for (const msg of messages) {
-      const otp = extractOTP(msg);
-      if (otp) {
-        const entry = {
-        number: number,
-        otp: otp,
-        time: new Date().toLocaleTimeString()
-      };
-      // duplicate avoid
-      if (!otpHistory.find(e => e.otp === otp && e.number === number)) {
-    otpHistory.unshift(entry);
+  // 🔥 LOOP NUMBERS
+      for (const number of numbers) {
+
+        const r3 = await makeRequest(
+      "POST",
+      "/portal/sms/received/getsms/number/sms",
+          new URLSearchParams({
+        _token: token,
+        start,
+        end,
+        Number: number,
+        Range: range
+      }).toString(),
+      "application/x-www-form-urlencoded"
+    );
+
+    // Extract messages
+      const rows = [...r3.body.matchAll(/class="msg-text"[^>]*>([\s\S]*?)<\/div>/gi)];
+      const messages = rows.map(m => clean(m[1]));
+
+      for (const msg of messages) {
+        const otp = extractOTP(msg);
+
+        if (otp) {
+          const entry = {
+          number,
+          otp,
+          range,
+          time: new Date().toLocaleTimeString()
+        };
+
+        // duplicate avoid
+          if (!otpHistory.find(e => e.otp === otp && e.number === number)) {
+          otpHistory.unshift(entry);
+        }
       }
     }
   }
 }
 
-
+// limit 30
 if (otpHistory.length > 30) {
   otpHistory = otpHistory.slice(0, 30);
 }
@@ -696,10 +710,15 @@ if (otpHistory.length > 30) {
 res.json({
   history: otpHistory
 });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+
+} catch (e) {
+  res.status(500).json({ error: e.message });
+}
+
+}); // 🔥 ye router.get ka closing hai
+
+
+
 
 // Cookie update endpoint — POST with JSON body
 // { "xsrf": "...", "session": "..." }
