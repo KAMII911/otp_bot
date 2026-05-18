@@ -6,6 +6,7 @@ let otpHistory = [];
 let seenOTPs = new Set();
 let history = [];
 let COOKIES = {
+  "cf_clearance": process.env.CF || "",
   "XSRF-TOKEN": process.env.XSRF || "",
   "ivas_sms_session": process.env.SESSION || ""
 };
@@ -13,8 +14,8 @@ const router = express.Router();
 
 /* ================= CONFIG ================= */
 const BASE_URL       = "https://www.ivasms.com";
-const TERMINATION_ID = "1029603"
-const USER_AGENT     = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36";
+const TERMINATION_ID = "9102674824"
+const USER_AGENT     = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Mobile Safari/537.36";
 
 /* ================= COOKIES (Update when expired) ================= */
 
